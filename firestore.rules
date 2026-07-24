@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for authentication and role checks
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isBookingParticipant(bookingId) {
+      let docPath = /databases/$(database)/documents/bookings/$(bookingId);
+      return isAuthenticated() && exists(docPath) && (
+        (get(docPath).data.get('patientUid', '') == request.auth.uid) ||
+        (get(docPath).data.get('doctorUid', '') == request.auth.uid) ||
+        (get(docPath).data.get('doctorEmail', '') == request.auth.token.get('email', ''))
+      );
+    }
+
+    // ===============================================================
+    // User Profiles Collection (/users/{userId})
+    // ===============================================================
+    match /users/{userId} {
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow read: if isOwner(userId) || (isAuthenticated() && resource.data.role == 'doctor');
+      allow update: if isOwner(userId) && 
+        // Allow updating profile (e.g., FCM tokens for mobile) but protect the role
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) ||  
+         request.resource.data.role == resource.data.role);
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // History Collection (/history/{historyId})
+    // ===============================================================
+    match /history/{historyId} {
+      allow create: if isAuthenticated() && (
+        (request.resource.data.get('uid', '') == request.auth.uid) || 
+        (request.resource.data.get('doctorUid', '') == request.auth.uid)
+      );
+      allow read, update, delete: if isAuthenticated() && (
+        (resource.data.get('uid', '') == request.auth.uid) || 
+        (resource.data.get('doctorUid', '') == request.auth.uid)
+      );
+    }
+
+    // ===============================================================
+    // Appointment Events Collection (/appointment/{appointmentId})
+    // ===============================================================
+    match /appointment/{appointmentId} {
+      allow create, update: if isAuthenticated() && (
+        (request.resource.data.get('uid', '') == request.auth.uid) || 
+        (request.resource.data.get('doctorUid', '') == request.auth.uid)
+      );
+      allow read, delete: if isAuthenticated() && (
+        (resource.data.get('uid', '') == request.auth.uid) || 
+        (resource.data.get('doctorUid', '') == request.auth.uid)
+      );
+    }
+
+    // ===============================================================
+    // Bookings Collection (/bookings/{bookingId})
+    // ===============================================================
+    match /bookings/{bookingId} {
+      allow create: if isAuthenticated() && ('patientUid' in request.resource.data) && request.resource.data.patientUid == request.auth.uid;
+      allow read, update, delete: if isAuthenticated() && (
+        (resource.data.get('patientUid', '') == request.auth.uid) || 
+        (resource.data.get('doctorUid', '') == request.auth.uid) || 
+        (resource.data.get('doctorEmail', '') == request.auth.token.get('email', ''))
+      );
+
+      // ADDED: Realtime subcollection rules for device-to-device Chat sync
+      match /messages/{messageId} {
+        allow create, read, update, delete: if isBookingParticipant(bookingId);
+      }
+
+      match /presence/{userId} {
+        allow read: if isBookingParticipant(bookingId);
+        allow create, update, delete: if isBookingParticipant(bookingId) && request.auth.uid == userId;
+      }
+
+      // Live Call Signaling (Unified with Booking lifecycle)
+      match /calls/active_session {
+        allow create, read, update, delete: if isBookingParticipant(bookingId);
+
+        match /offerCandidates/{candidateId} {
+          allow create, read, delete: if isBookingParticipant(bookingId);
+        }
+        match /answerCandidates/{candidateId} {
+          allow create, read, delete: if isBookingParticipant(bookingId);
+        }
+      }
+    }
+
+    // ===============================================================
+    // Tracking Collection (/tracking/{trackingId})
+    // ===============================================================
+    match /tracking/{trackingId} {
+      allow create: if isAuthenticated() && request.resource.data.get('uid', '') == request.auth.uid;
+      allow read, update, delete: if isAuthenticated() && resource.data.get('uid', '') == request.auth.uid;
+    }
+  }
+}

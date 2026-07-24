@@ -1,0 +1,7 @@
+{
+  "name": "Skin Lesion Classifier",
+  "description": "AI-powered medical application for skin lesion classification using advanced deep learning models.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
